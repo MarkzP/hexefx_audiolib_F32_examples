@@ -46,23 +46,27 @@
 #ifdef USE_TEENSY_AUDIO_BOARD
 AudioControlSGTL5000			codec;
 AudioInputI2S_F32				i2s_in;
-AudioEffectNoiseGateStereo_F32	gate;
+AudioSwitchSelectorStereo		inputSwitch;
+AudioBasicTempBuffer_F32		InBufferL;
+AudioBasicTempBuffer_F32		InBufferR;
 AudioEffectRTNeural_F32			amp;
 AudioFilterEqualizer3bandStereo_F32	toneStack;
+AudioEffectNoiseGateStereo_F32	gate(InBufferL.dataPtr, InBufferR.dataPtr);
 AudioEffectDelayStereo_F32		echo=AudioEffectDelayStereo_F32(1000, true); // 1 sec delay, buffer in PSRAM;
 AudioEffectSpringReverb_F32		reverb;
 AudioEffectGainStereo_F32		masterVol;
 AudioFilterIRCabsim_F32			cabsim;
-
-
 AudioOutputI2S_F32     			i2s_out;
 #else
-// HW configuration for the HexeFX T41.GFX pedal (I2S2 + WM8731 coded)
-AudioControlWM8731              codec;
+// HW configuration for the HexeFX T41.GFX pedal (I2S2 + WM8731 codec)
+AudioControlWM8731_F32			codec;
 AudioInputI2S2_F32				i2s_in;
-AudioEffectNoiseGateStereo_F32	gate;
+AudioSwitchSelectorStereo		inputSwitch;
+AudioBasicTempBuffer_F32		InBufferL;
+AudioBasicTempBuffer_F32		InBufferR;
 AudioEffectRTNeural_F32			amp;
 AudioFilterEqualizer3bandStereo_F32	toneStack;
+AudioEffectNoiseGateStereo_F32	gate(InBufferL.dataPtr, InBufferR.dataPtr);
 AudioEffectDelayStereo_F32		echo=AudioEffectDelayStereo_F32(1000, true); // 1 sec delay, buffer in PSRAM;
 AudioEffectSpringReverb_F32		reverb;
 AudioEffectGainStereo_F32		masterVol;
@@ -70,25 +74,28 @@ AudioFilterIRCabsim_F32			cabsim;
 AudioOutputI2S2_F32     		i2s_out;
 #endif
 
-AudioConnection_F32     cable0(i2s_in, 0, gate, 2); // gate side chaain input
-AudioConnection_F32     cable1(i2s_in, 1, gate, 3);
-AudioConnection_F32     cable2(i2s_in, 0, amp, 0);	// amp input
-AudioConnection_F32     cable3(i2s_in, 1, amp, 1);
-AudioConnection_F32		cable4(amp, 0, toneStack, 0); 
-AudioConnection_F32		cable5(amp, 1, toneStack, 1);
-AudioConnection_F32 	cable6(toneStack, 0, gate, 0);
-AudioConnection_F32 	cable7(toneStack, 1, gate, 1); 
-AudioConnection_F32		cable8(gate, 0, echo, 0);	// gate gain element into delay
-AudioConnection_F32		cable9(gate, 1, echo, 1);
-AudioConnection_F32		cable10(echo, 0, reverb, 0);	// delay -> reverb
-AudioConnection_F32		cable11(echo, 1, reverb, 1);
-AudioConnection_F32		cable12(reverb, 0, masterVol, 0); // reverb-> master volume
-AudioConnection_F32		cable13(reverb, 1, masterVol, 1);
-// --- stereo IR canbsim + doubler ---
-AudioConnection_F32		cable20(masterVol, 0, cabsim, 0);
-AudioConnection_F32		cable21(masterVol, 1, cabsim, 1);
-AudioConnection_F32     cable50(cabsim, 0, i2s_out, 0);
-AudioConnection_F32     cable51(cabsim, 1, i2s_out, 1);
+
+AudioConnection_F32 	cable1(i2s_in, 0, inputSwitch, 0);
+AudioConnection_F32 	cable2(i2s_in, 1, inputSwitch, 1);
+AudioConnection_F32     cable10(inputSwitch, 0, InBufferL, 0); 
+AudioConnection_F32     cable11(inputSwitch, 0, amp, 0);	
+AudioConnection_F32     cable12(inputSwitch, 1, InBufferR, 0);
+AudioConnection_F32     cable13(inputSwitch, 1, amp, 1);
+AudioConnection_F32		cable20(amp, 0, toneStack, 0); 
+AudioConnection_F32		cable21(amp, 1, toneStack, 1);
+AudioConnection_F32 	cable22(toneStack, 0, gate, 0);
+AudioConnection_F32 	cable23(toneStack, 1, gate, 1); 
+AudioConnection_F32		cable30(gate, 0, echo, 0);	// gate gain element into delay
+AudioConnection_F32		cable31(gate, 1, echo, 1);
+AudioConnection_F32		cable40(echo, 0, reverb, 0);	// delay -> reverb
+AudioConnection_F32		cable41(echo, 1, reverb, 1);
+AudioConnection_F32		cable50(reverb, 0, masterVol, 0); // reverb-> master volume
+AudioConnection_F32		cable51(reverb, 1, masterVol, 1);
+// --- stereo IR cabsim + doubler ---
+AudioConnection_F32		cable60(masterVol, 0, cabsim, 0);
+AudioConnection_F32		cable61(masterVol, 1, cabsim, 1);
+AudioConnection_F32     cable70(cabsim, 0, i2s_out, 0);
+AudioConnection_F32     cable71(cabsim, 1, i2s_out, 1);
 
 BasicTerm term(&DBG_SERIAL); // terminal is used to print out the status and info via WebSerial
 
@@ -127,8 +134,8 @@ void setup()
 	codec.lineInLevel(10, 10);
 	codec.adcHighPassFilterDisable();
 #else
-    if (!codec.enable()) DBG_SERIAL.println("Codec init error!");
-    codec.inputSelect(AUDIO_INPUT_LINEIN);
+    if (!codec.enable(AudioControlWM8731_F32::I2S_BITS_32)) DBG_SERIAL.println("Codec init error!");
+    codec.inputSelect(AudioControlWM8731_F32::INPUT_SELECT_LINEIN);
     codec.inputLevel(0.77f);
 #endif
 	DBG_SERIAL.println("Codec initialized.");
@@ -136,6 +143,8 @@ void setup()
     usbMIDI.setHandleNoteOn(cb_NoteOn);
     usbMIDI.setHandleControlChange(cb_ControlChange);
 	usbMIDI.setHandleClock(cb_MidiClock);
+	// start with Lef input - typical guitar mono jack
+	inputSwitch.setMode(AudioSwitchSelectorStereo::SIGNAL_SELECT_L);
 
 	amp.changeModel(0);
 	// default sound settings:
@@ -242,6 +251,15 @@ void cb_NoteOn(byte channel, byte note, byte velocity)
 			break;
 		case 40 ... 48:
 			amp.changeModel(note-40);
+			break;
+		case 80:	// input channels L+R
+			inputSwitch.setMode(AudioSwitchSelectorStereo::SIGNAL_SELECT_LR);
+			break;
+		case 81:		//input channel L
+			inputSwitch.setMode(AudioSwitchSelectorStereo::SIGNAL_SELECT_L);
+			break;
+		case 82:		//input channel R
+			inputSwitch.setMode(AudioSwitchSelectorStereo::SIGNAL_SELECT_R);
 			break;
         default:
             break;
